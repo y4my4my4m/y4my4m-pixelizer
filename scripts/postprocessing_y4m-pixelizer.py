@@ -34,10 +34,10 @@ def process_image(img, pixel_size, upscale_after, tolerance):
 
     return img
 
+
 def separate_sprites(img):
     width, height = img.size
     sprites = []
-
     visited = [[False for _ in range(width)] for _ in range(height)]
 
     def flood_fill(x, y, bounds):
@@ -58,6 +58,8 @@ def separate_sprites(img):
                         visited[ny][nx] = True
                         queue.append((nx, ny))
 
+    # Identify all sprites and determine the largest sprite size
+    max_width, max_height = 0, 0
     for y in range(height):
         for x in range(width):
             if not visited[y][x] and img.getpixel((x, y))[3] != 0:  # Non-transparent and not visited
@@ -67,20 +69,20 @@ def separate_sprites(img):
 
                 if right > left and bottom > top:  # Valid sprite bounds
                     sprite = img.crop((left, top, right + 1, bottom + 1))
+                    max_width = max(max_width, right - left + 1)
+                    max_height = max(max_height, bottom - top + 1)
+                    sprites.append((sprite, left, top, right, bottom))
 
-                    # Create a new image with uniform size, anchored to the bottom-left
-                    sprite_width = right - left + 1
-                    sprite_height = bottom - top + 1
-                    max_width = max([s.size[0] for s in sprites], default=sprite_width)
-                    max_height = max([s.size[1] for s in sprites], default=sprite_height)
+    # Pad sprites to ensure they are all the same size
+    padded_sprites = []
+    for sprite, left, top, right, bottom in sprites:
+        padded_sprite = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
+        sprite_width = right - left + 1
+        sprite_height = bottom - top + 1
+        padded_sprite.paste(sprite, (0, max_height - sprite_height))  # Anchor to bottom-left
+        padded_sprites.append(padded_sprite)
 
-                    padded_sprite = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
-                    padded_sprite.paste(sprite, (0, max_height - sprite_height))  # Anchor to bottom-left
-
-                    sprites.append(padded_sprite)
-
-    return sprites
-
+    return padded_sprites
 
 
 def generate_gif(img, framerate):
@@ -91,11 +93,29 @@ def generate_gif(img, framerate):
     # Create a unique filename using the current timestamp
     timestamp = int(time.time())
     gif_filename = f"output_{timestamp}.gif"
-    gif_path = os.path.join("output/extras-images", gif_filename)  # Save the GIF to a specific directory
+    gif_path = os.path.join("extras-images", gif_filename)  # Save the GIF to a specific directory
+    gif_path = os.path.join("output", gif_path)  # Add the "output" folder to the path
+
+    # Determine the size of the GIF based on the largest sprite
+    max_width = max(sprite.size[0] for sprite in sprites)
+    max_height = max(sprite.size[1] for sprite in sprites)
+
+    frames = []
+    for sprite in sprites:
+        # Create a blank canvas with transparent background
+        frame = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
+        
+        # Paste the sprite onto the blank canvas, clearing out any previous data
+        frame.paste(sprite, (0, max_height - sprite.size[1]))  # Anchor to bottom-left
+        frames.append(frame)
+
+    # Ensure that each frame is fully independent
+    for i in range(len(frames)):
+        frames[i] = frames[i].copy()  # Make sure each frame is a separate image
 
     # Save the frames as a GIF
-    gif = sprites[0]
-    gif.save(gif_path, save_all=True, append_images=sprites[1:], optimize=False, duration=1000//framerate, loop=0)
+    gif = frames[0]
+    gif.save(gif_path, save_all=True, append_images=frames[1:], optimize=False, duration=1000//framerate, loop=0, disposal=2)
     
     return gif_path
 

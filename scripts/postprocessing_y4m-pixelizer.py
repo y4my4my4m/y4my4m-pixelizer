@@ -2,7 +2,7 @@ import os
 import gradio as gr
 from modules import scripts_postprocessing, devices, scripts, ui_components
 from modules.ui_components import FormRow
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import time
 
 def is_within_tolerance(pixel, reference_pixel, tolerance):
@@ -34,58 +34,148 @@ def process_image(img, pixel_size, upscale_after, tolerance):
 
     return img
 
+# def separate_sprites_debug(img):
+#     width, height = img.size
+#     sprites = []
+#     visited = [[False for _ in range(width)] for _ in range(height)]
+
+#     def flood_fill(x, y):
+#         queue = [(x, y)]
+#         visited[y][x] = True
+#         left, top, right, bottom = x, y, x, y
+
+#         while queue:
+#             cx, cy = queue.pop(0)
+#             left = min(left, cx)
+#             top = min(top, cy)
+#             right = max(right, cx)
+#             bottom = max(bottom, cy)
+
+#             for nx, ny in [(cx-1, cy), (cx+1, cy), (cx, cy-1), (cx, cy+1)]:
+#                 if 0 <= nx < width and 0 <= ny < height and not visited[ny][nx]:
+#                     if img.getpixel((nx, ny))[3] != 0:  # Non-transparent pixel
+#                         visited[ny][nx] = True
+#                         queue.append((nx, ny))
+
+#         return (left, top, right, bottom)
+
+#     # Traverse the image systematically (left to right, top to bottom)
+#     for y in range(height):
+#         for x in range(width):
+#             if not visited[y][x] and img.getpixel((x, y))[3] != 0:  # Non-transparent and not visited
+#                 bounds = flood_fill(x, y)
+#                 left, top, right, bottom = bounds
+#                 sprite = img.crop((left, top, right + 1, bottom + 1))
+#                 sprites.append((sprite, left, top, right, bottom))
+
+#     # Sort sprites by their top (y) first, then by their left (x)
+#     sprites.sort(key=lambda s: (s[2]))  # Sort by top (y)
+
+#     # Group by rows
+#     rows = []
+#     current_row = []
+#     row_threshold = 10  # Adjust this value if necessary
+#     previous_top = None
+
+#     for sprite in sprites:
+#         _, left, top, _, _ = sprite
+#         if previous_top is None or abs(top - previous_top) <= row_threshold:
+#             current_row.append(sprite)
+#         else:
+#             rows.append(current_row)
+#             current_row = [sprite]
+#         previous_top = top
+
+#     if current_row:
+#         rows.append(current_row)
+
+#     # Sort each row by the left (x)
+#     sorted_sprites = []
+#     for row in rows:
+#         row.sort(key=lambda s: s[1])  # Sort by left (x)
+#         sorted_sprites.extend(row)
+
+#     # Draw rectangles and frame numbers on the original image for debug
+#     draw = ImageDraw.Draw(img)
+#     font = ImageFont.load_default()
+
+#     for i, (sprite, left, top, right, bottom) in enumerate(sorted_sprites):
+#         # Draw the rectangle
+#         draw.rectangle([left, top, right, bottom], outline="red", width=2)
+#         # Draw the frame number
+#         draw.text((left + 2, top + 2), str(i + 1), fill="yellow", font=font)
+#     # Save the debug image
+#     debug_image_path = "output\debug_spritesheet.png"
+#     img.save(debug_image_path)
+
+#     return debug_image_path
 
 def separate_sprites(img):
     width, height = img.size
     sprites = []
     visited = [[False for _ in range(width)] for _ in range(height)]
 
-    def flood_fill(x, y, bounds):
+    def flood_fill(x, y):
         queue = [(x, y)]
         visited[y][x] = True
+        left, top, right, bottom = x, y, x, y
 
         while queue:
             cx, cy = queue.pop(0)
-            bounds[0] = min(bounds[0], cx)  # left
-            bounds[1] = min(bounds[1], cy)  # top
-            bounds[2] = max(bounds[2], cx)  # right
-            bounds[3] = max(bounds[3], cy)  # bottom
+            left = min(left, cx)
+            top = min(top, cy)
+            right = max(right, cx)
+            bottom = max(bottom, cy)
 
-            # Check all neighboring pixels
             for nx, ny in [(cx-1, cy), (cx+1, cy), (cx, cy-1), (cx, cy+1)]:
                 if 0 <= nx < width and 0 <= ny < height and not visited[ny][nx]:
                     if img.getpixel((nx, ny))[3] != 0:  # Non-transparent pixel
                         visited[ny][nx] = True
                         queue.append((nx, ny))
 
-    # Identify all sprites and determine the largest sprite size
-    max_width, max_height = 0, 0
+        return (left, top, right, bottom)
+
+    # Traverse the image systematically (left to right, top to bottom)
     for y in range(height):
         for x in range(width):
             if not visited[y][x] and img.getpixel((x, y))[3] != 0:  # Non-transparent and not visited
-                bounds = [x, y, x, y]  # left, top, right, bottom
-                flood_fill(x, y, bounds)
+                bounds = flood_fill(x, y)
                 left, top, right, bottom = bounds
+                sprite = img.crop((left, top, right + 1, bottom + 1))
+                sprites.append((sprite, left, top, right, bottom))
 
-                if right > left and bottom > top:  # Valid sprite bounds
-                    sprite = img.crop((left, top, right + 1, bottom + 1))
-                    max_width = max(max_width, right - left + 1)
-                    max_height = max(max_height, bottom - top + 1)
-                    sprites.append((sprite, left, top, right, bottom))
+    # Sort sprites by their top (y) first, then by their left (x)
+    sprites.sort(key=lambda s: s[2])  # Sort by top (y)
 
-    # Pad sprites to ensure they are all the same size
-    padded_sprites = []
-    for sprite, left, top, right, bottom in sprites:
-        padded_sprite = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
-        sprite_width = right - left + 1
-        sprite_height = bottom - top + 1
-        padded_sprite.paste(sprite, (0, max_height - sprite_height))  # Anchor to bottom-left
-        padded_sprites.append(padded_sprite)
+    # Group by rows
+    rows = []
+    current_row = []
+    row_threshold = 10  # Adjust this value if necessary
+    previous_top = None
 
-    return padded_sprites
+    for sprite in sprites:
+        _, left, top, _, _ = sprite
+        if previous_top is None or abs(top - previous_top) <= row_threshold:
+            current_row.append(sprite)
+        else:
+            rows.append(current_row)
+            current_row = [sprite]
+        previous_top = top
+
+    if current_row:
+        rows.append(current_row)
+
+    # Sort each row by the left (x)
+    sorted_sprites = []
+    for row in rows:
+        row.sort(key=lambda s: s[1])  # Sort by left (x)
+        sorted_sprites.extend(row)
+
+    return [sprite for sprite, _, _, _, _ in sorted_sprites]
 
 
 def generate_gif(img, framerate):
+    # Get the list of sprites in correct order
     sprites = separate_sprites(img)
     if not sprites:
         raise ValueError("No sprites found in the image.")
@@ -101,17 +191,23 @@ def generate_gif(img, framerate):
     max_height = max(sprite.size[1] for sprite in sprites)
 
     frames = []
-    for sprite in sprites:
+    for index, sprite in enumerate(sprites):
         # Create a blank canvas with transparent background
         frame = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
         
         # Paste the sprite onto the blank canvas, clearing out any previous data
         frame.paste(sprite, (0, max_height - sprite.size[1]))  # Anchor to bottom-left
+        
+        # # Save the individual frame image for analysis
+        # frame_filename = f"output_{timestamp}_{index}.png"
+        # frame_path = os.path.join("extras-images", frame_filename)  # Save the frame to a specific directory
+        # frame_path = os.path.join("output", frame_path)  # Add the "output" folder to the path
+        # frame.save(frame_path)
+    
         frames.append(frame)
 
     # Ensure that each frame is fully independent
-    for i in range(len(frames)):
-        frames[i] = frames[i].copy()  # Make sure each frame is a separate image
+    frames = [frame.copy() for frame in frames]  # Copy each frame to ensure they're independent
 
     # Save the frames as a GIF
     gif = frames[0]
@@ -152,14 +248,13 @@ class ScriptPostprocessingUpscale(scripts_postprocessing.ScriptPostprocessing):
         # Update the PostprocessedImage object with the processed image
         pp.image = processed_image
 
+        # debug_image_path = separate_sprites_debug(processed_image)
+        # debug_image_path
+
         if make_gif:
             gif_path = generate_gif(processed_image, framerate)
             pp.info["Generated GIF Path"] = gif_path  # Store the GIF path in pp.info
-            pp.image = Image.open(gif_path)  # Optionally load the saved GIF back if needed
-
-            # gif = generate_gif(processed_image, framerate)
-            # pp.info["Generated GIF"] = gif  # Add GIF info (or store the GIF path if needed)
-            # pp.image = gif
+            # pp.image = Image.open(gif_path)  # Optionally load the saved GIF back if needed
 
         # Optionally, add some info about the processing
         pp.info["Pixelization pixel size"] = pixel_size
